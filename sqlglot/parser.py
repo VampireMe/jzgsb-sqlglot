@@ -5990,14 +5990,53 @@ class Parser:
         )
 
     def _parse_set_operations(self, this: exp.Expr | None) -> exp.Expr | None:
-        while this:
+        if not this:
+            return None
+
+        operands: list[exp.Expr] = []
+        operations: list[exp.Expr] = []
+
+        while True:
             setop = self.parse_set_operation(this)
             if not setop:
                 break
+
+            if not operands:
+                operands.append(setop.this)
+            operands.append(setop.expression)
+            operations.append(setop)
+
             this = setop
+
+        if operations:
+            # INTERSECT binds more tightly than UNION and EXCEPT, which share the same
+            # precedence level and are left-associative, e.g. a UNION b INTERSECT c is
+            # parsed as a UNION (b INTERSECT c)
+            grouped: list[exp.Expr] = [operands[0]]
+            lower_precedence: list[exp.Expr] = []
+
+            for operation, operand in zip(operations, operands[1:]):
+                if isinstance(operation, exp.Intersect):
+                    operation.set("this", grouped.pop())
+                    operation.set("expression", operand)
+                    grouped.append(operation)
+                else:
+                    lower_precedence.append(operation)
+                    grouped.append(operand)
+
+            this = grouped[0]
+            for operation, operand in zip(lower_precedence, grouped[1:]):
+                operation.set("this", this)
+                operation.set("expression", operand)
+                this = operation
 
         if isinstance(this, exp.SetOperation) and self.MODIFIERS_ATTACHED_TO_SET_OP:
             expression = this.expression
+
+            # Query modifiers are parsed as part of the rightmost operand, which may
+            # be nested inside a higher-precedence INTERSECT chain
+            while isinstance(expression, exp.SetOperation):
+                expression = expression.expression
 
             if expression:
                 for arg in self.SET_OP_MODIFIERS:

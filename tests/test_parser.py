@@ -271,6 +271,45 @@ class TestParser(unittest.TestCase):
         self.assertIsNone(expr.args.get("limit"))
         self.assertEqual(expr.sql(dialect="clickhouse"), single_union)
 
+    def test_set_operation_precedence(self):
+        # INTERSECT binds more tightly than UNION and EXCEPT, which share the same
+        # precedence level and are left-associative
+        expr = parse_one("SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4")
+
+        except_ = expr.assert_is(exp.Except)
+        union = except_.this.assert_is(exp.Union)
+        self.assertIsInstance(union.expression, exp.Intersect)
+        self.assertEqual(union.this.sql(), "SELECT 1")
+        self.assertEqual(except_.expression.sql(), "SELECT 4")
+
+        expr = parse_one("SELECT 1 INTERSECT SELECT 2 UNION SELECT 3")
+        union = expr.assert_is(exp.Union)
+        self.assertIsInstance(union.this, exp.Intersect)
+        self.assertEqual(union.expression.sql(), "SELECT 3")
+
+        # Same-precedence operations are left-associative
+        expr = parse_one("SELECT 1 UNION SELECT 2 EXCEPT SELECT 3 UNION SELECT 4")
+        union = expr.assert_is(exp.Union)
+        except_ = union.this.assert_is(exp.Except)
+        self.assertIsInstance(except_.this, exp.Union)
+        self.assertEqual(union.expression.sql(), "SELECT 4")
+
+        # Modifiers are attached to the topmost set operation node
+        expr = parse_one("SELECT 1 UNION SELECT 2 INTERSECT SELECT 3 LIMIT 1")
+        self.assertIsInstance(expr.assert_is(exp.Union).args.get("limit"), exp.Limit)
+
+        # The grouping is preserved when transpiling back and forth
+        for sql in (
+            "SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4",
+            "SELECT 1 INTERSECT SELECT 2 UNION ALL SELECT 3 INTERSECT SELECT 4",
+            "SELECT 1 EXCEPT SELECT 2 INTERSECT SELECT 3",
+        ):
+            for dialect in ("postgres", "duckdb", "snowflake"):
+                expr = parse_one(sql, read=dialect)
+                transpiled = expr.sql(dialect=dialect)
+                self.assertEqual(transpiled, sql)
+                self.assertEqual(repr(parse_one(transpiled, read=dialect)), repr(expr))
+
     def test_mod_precedence(self):
         expression = parse_one("SELECT 10 % 3 / 2").expressions[0]
 
