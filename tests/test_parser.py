@@ -271,6 +271,47 @@ class TestParser(unittest.TestCase):
         self.assertIsNone(expr.args.get("limit"))
         self.assertEqual(expr.sql(dialect="clickhouse"), single_union)
 
+    def test_set_operation_precedence(self):
+        # INTERSECT binds more tightly than UNION / EXCEPT, which are left-associative
+        expr = parse_one("SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4")
+        union = expr.assert_is(exp.Except).this.assert_is(exp.Union)
+        intersect = union.expression.assert_is(exp.Intersect)
+        self.assertEqual(intersect.this.sql(), "SELECT 2")
+        self.assertEqual(intersect.expression.sql(), "SELECT 3")
+
+        expr = parse_one("SELECT 1 EXCEPT SELECT 2 UNION SELECT 3")
+        self.assertIsInstance(expr.assert_is(exp.Union).this, exp.Except)
+
+        expr = parse_one("SELECT 1 INTERSECT SELECT 2 UNION SELECT 3")
+        self.assertIsInstance(expr.assert_is(exp.Union).this, exp.Intersect)
+
+        # Trailing query modifiers attach to the top-level set operation
+        expr = parse_one("SELECT 1 UNION SELECT 2 INTERSECT SELECT 3 ORDER BY 1 LIMIT 2")
+        union = expr.assert_is(exp.Union)
+        self.assertIsInstance(union.expression, exp.Intersect)
+        self.assertIsNotNone(union.args.get("order"))
+        self.assertIsNotNone(union.args.get("limit"))
+
+        # Round-tripping preserves the grouping
+        for sql in (
+            "SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4",
+            "SELECT 1 INTERSECT SELECT 2 UNION ALL SELECT 3",
+            "SELECT 1 EXCEPT SELECT 2 INTERSECT SELECT 3 UNION SELECT 4",
+        ):
+            self.assertEqual(
+                parse_one(parse_one(sql).sql("duckdb"), read="duckdb"), parse_one(sql)
+            )
+
+        # Non-canonical trees are parenthesized to preserve their semantics
+        self.assertEqual(
+            parse_one("SELECT 1 UNION SELECT 2").intersect(parse_one("SELECT 3")).sql(),
+            "(SELECT 1 UNION SELECT 2) INTERSECT SELECT 3",
+        )
+        self.assertEqual(
+            parse_one("SELECT 1").union(parse_one("SELECT 2 EXCEPT SELECT 3")).sql(),
+            "SELECT 1 UNION (SELECT 2 EXCEPT SELECT 3)",
+        )
+
     def test_mod_precedence(self):
         expression = parse_one("SELECT 10 % 3 / 2").expressions[0]
 

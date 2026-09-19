@@ -1921,17 +1921,43 @@ class Generator:
             node = stack.pop()
 
             if isinstance(node, exp.SetOperation):
-                stack.append(node.expression)
+                this = node.this
+                right = node.expression
+
+                # INTERSECT binds more tightly than UNION / EXCEPT, so parenthesize operands
+                # that would otherwise be reparsed with a different grouping
+                if isinstance(right, exp.SetOperation) and (
+                    isinstance(node, exp.Intersect) or not isinstance(right, exp.Intersect)
+                ):
+                    stack.extend((")", right, "("))
+                else:
+                    stack.append(right)
+
                 stack.append(
                     self.maybe_comment(
                         self.set_operation(node), comments=node.comments, separated=True
                     )
                 )
-                stack.append(node.this)
+
+                if (
+                    isinstance(node, exp.Intersect)
+                    and isinstance(this, exp.SetOperation)
+                    and not isinstance(this, exp.Intersect)
+                ):
+                    stack.extend((")", this, "("))
+                else:
+                    stack.append(this)
             else:
                 sqls.append(self.sql(node))
 
-        this = self.sep().join(sqls)
+        this = ""
+        sep = self.sep()
+
+        for sql in sqls:
+            if this and sql != ")" and not this.endswith("("):
+                this += sep
+            this += sql
+
         this = self.query_modifiers(expression, this)
         return self.prepend_ctes(expression, this)
 

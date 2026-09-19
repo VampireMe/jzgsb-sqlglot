@@ -5963,6 +5963,20 @@ class Parser:
             nested=True, parse_set_operation=False, consume_pipe=consume_pipe
         )
 
+        # INTERSECT binds more tightly than UNION / EXCEPT, so the right operand of the
+        # latter extends over any subsequent INTERSECT chain
+        if operation is not exp.Intersect:
+            while True:
+                index = self._index
+                self._parse_join_parts()
+                follows_intersect = self._curr.token_type == TokenType.INTERSECT
+                self._retreat(index)
+
+                if not follows_intersect:
+                    break
+
+                expression = self.parse_set_operation(expression)
+
         # Wrap VALUES operands in selects, both for consistency with the CTE canonicalization
         # in _parse_cte and so that alias pushdown can reach into set operation branches
         if isinstance(this, exp.Values):
@@ -5998,6 +6012,11 @@ class Parser:
 
         if isinstance(this, exp.SetOperation) and self.MODIFIERS_ATTACHED_TO_SET_OP:
             expression = this.expression
+
+            # The right operand can be a nested INTERSECT chain, so walk down to the
+            # innermost query that may have absorbed the trailing query modifiers
+            while isinstance(expression, exp.SetOperation):
+                expression = expression.expression
 
             if expression:
                 for arg in self.SET_OP_MODIFIERS:
