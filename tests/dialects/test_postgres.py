@@ -2170,3 +2170,31 @@ CROSS JOIN JSON_ARRAY_ELEMENTS(CAST(JSON_EXTRACT_PATH(tbox, 'boxes') AS JSON)) A
         is_not_null = self.parse_one("r IS NOT NULL")
         is_not_null.assert_is(exp.Is)
         self.assertTrue(is_not_null.args.get("negate"))
+
+    def test_set_operation_precedence(self):
+        # INTERSECT binds more tightly than UNION/EXCEPT, which share the same
+        # precedence level and are thus left-associative
+        ast = self.parse_one("SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4")
+        self.assertIsInstance(ast, exp.Except)
+        self.assertIsInstance(ast.this, exp.Union)
+        self.assertIsInstance(ast.this.expression, exp.Intersect)
+        self.assertFalse(ast.this.args["distinct"])
+
+        ast = self.parse_one("SELECT 1 EXCEPT SELECT 2 UNION SELECT 3")
+        self.assertIsInstance(ast, exp.Union)
+        self.assertIsInstance(ast.this, exp.Except)
+
+        ast = self.parse_one("(SELECT 1 UNION SELECT 2) INTERSECT SELECT 3")
+        self.assertIsInstance(ast, exp.Intersect)
+        self.assertIsInstance(ast.this, exp.Subquery)
+
+        # transpiling to duckdb and back preserves the grouping
+        for sql in (
+            "SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4",
+            "SELECT 1 INTERSECT SELECT 2 UNION ALL SELECT 3",
+            "SELECT 1 UNION SELECT 2 UNION ALL SELECT 3 INTERSECT SELECT 4",
+            "SELECT 1 UNION BY NAME SELECT 2 INTERSECT ALL SELECT 3",
+        ):
+            self.validate_identity(sql)
+            ast = self.parse_one(sql)
+            self.assertEqual(parse_one(ast.sql("duckdb"), dialect="duckdb"), ast)
