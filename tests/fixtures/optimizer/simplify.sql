@@ -1683,6 +1683,14 @@ x;
 IF(FALSE, x, y);
 y;
 
+# execute: true
+SELECT x * CASE WHEN 5 IS NULL THEN NULL ELSE a - 5 END FROM x;
+SELECT x * (a - 5) FROM x;
+
+# execute: true
+SELECT x * IF(5 IS NULL, NULL, a - 5) FROM x;
+SELECT x * (a - 5) FROM x;
+
 IF(FALSE, x);
 NULL;
 
@@ -1825,4 +1833,3 @@ SELECT 100;
 # dialect: snowflake
 SELECT * FROM o ASOF JOIN e MATCH_CONDITION (o.observed_date >= e.metric_date) ON o.id = e.id;
 SELECT * FROM o ASOF JOIN e MATCH_CONDITION (o.observed_date >= e.metric_date) ON e.id = o.id;
-

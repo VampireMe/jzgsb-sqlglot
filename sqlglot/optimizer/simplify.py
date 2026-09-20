@@ -315,6 +315,28 @@ def _parenthesize_nested_connector(expression: exp.Expr, parent: exp.Expr | None
     return expression
 
 
+def _parenthesize_conditional_result(
+    conditional: exp.Case | exp.If | exp.Not,
+    expression: exp.Expr | None,
+    dialect: DialectType,
+) -> exp.Expr | None:
+    expression = _parenthesize_nested_connector(expression, conditional.parent)
+    if isinstance(expression, exp.Paren):
+        return expression
+
+    if not isinstance(expression, (exp.Binary, exp.Not)):
+        return expression
+
+    parent = conditional.parent
+    if isinstance(parent, exp.Binary) and not isinstance(parent, exp.Connector):
+        paren = exp.Paren(this=expression)
+        paren.parent = parent
+        if simplify_parens(paren, dialect) is paren:
+            return exp.paren(expression, copy=False)
+
+    return expression
+
+
 def always_true(expression: object) -> bool:
     return (isinstance(expression, exp.Boolean) and expression.this) or (
         isinstance(expression, exp.Literal) and expression.is_number and not is_zero(expression)
@@ -844,7 +866,11 @@ class Simplifier:
                 if complement_subquery_predicate:
                     right = complement_subquery_predicate(this=right.this)
 
-                return self.COMPLEMENT_COMPARISONS[this.__class__](this=this.this, expression=right)
+                return _parenthesize_conditional_result(
+                    expression,
+                    self.COMPLEMENT_COMPARISONS[this.__class__](this=this.this, expression=right),
+                    self.dialect,
+                )
             if isinstance(this, exp.Paren):
                 condition = this.unnest()
                 if isinstance(condition, exp.And):
@@ -1445,17 +1471,25 @@ class Simplifier:
                     cond = cond.replace(this.pop().eq(cond))
 
                 if always_true(cond):
-                    return case.args["true"]
+                    return _parenthesize_conditional_result(
+                        expression, case.args["true"], self.dialect
+                    )
 
                 if always_false(cond):
                     case.pop()
                     if not expression.args["ifs"]:
-                        return expression.args.get("default") or exp.null()
+                        return _parenthesize_conditional_result(
+                            expression, expression.args.get("default") or exp.null(), self.dialect
+                        )
         elif isinstance(expression, exp.If) and not isinstance(expression.parent, exp.Case):
             if always_true(expression.this):
-                return expression.args["true"]
+                return _parenthesize_conditional_result(
+                    expression, expression.args["true"], self.dialect
+                )
             if always_false(expression.this):
-                return expression.args.get("false") or exp.null()
+                return _parenthesize_conditional_result(
+                    expression, expression.args.get("false") or exp.null(), self.dialect
+                )
 
         return expression
 
