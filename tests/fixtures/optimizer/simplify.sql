@@ -1734,6 +1734,24 @@ CASE WHEN x = y THEN z END;
 CASE x1 + x2 WHEN x3 THEN x4 WHEN x5 + x6 THEN x7 ELSE x8 END;
 CASE WHEN x3 = (x1 + x2) THEN x4 WHEN (x1 + x2) = (x5 + x6) THEN x7 ELSE x8 END;
 
+x * CASE WHEN 5 IS NULL THEN NULL ELSE a - 5 END;
+x * (a - 5);
+
+x * IF(1 = 2, NULL, a - 5);
+x * (a - 5);
+
+x - CASE WHEN TRUE THEN a - 5 END;
+x - (a - 5);
+
+x * CASE WHEN TRUE THEN a + b END;
+x * (a + b);
+
+a AND CASE WHEN FALSE THEN b ELSE c OR d END;
+a AND (c OR d);
+
+CASE WHEN FALSE THEN x ELSE a - 5 END;
+a - 5;
+
 --------------------------------------
 -- Simplify STARTSWITH
 --------------------------------------
@@ -1825,4 +1843,3 @@ SELECT 100;
 # dialect: snowflake
 SELECT * FROM o ASOF JOIN e MATCH_CONDITION (o.observed_date >= e.metric_date) ON o.id = e.id;
 SELECT * FROM o ASOF JOIN e MATCH_CONDITION (o.observed_date >= e.metric_date) ON e.id = o.id;
-

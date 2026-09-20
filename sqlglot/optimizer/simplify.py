@@ -1436,6 +1436,13 @@ class Simplifier:
     @annotate_types_on_change
     def simplify_conditionals(self, expression):
         """Simplifies expressions like IF, CASE if their condition is statically known."""
+
+        def _replace_with(inner: exp.Expr) -> exp.Expr:
+            # A CASE/IF branch can bind less tightly than its new parent once the
+            # conditional is removed, so we wrap it in parentheses to preserve the
+            # original semantics. Redundant parens are removed by simplify_parens.
+            return exp.Paren(this=inner) if isinstance(inner, exp.Binary) else inner
+
         if isinstance(expression, exp.Case):
             this = expression.this
             for case in expression.args["ifs"]:
@@ -1445,17 +1452,17 @@ class Simplifier:
                     cond = cond.replace(this.pop().eq(cond))
 
                 if always_true(cond):
-                    return case.args["true"]
+                    return _replace_with(case.args["true"])
 
                 if always_false(cond):
                     case.pop()
                     if not expression.args["ifs"]:
-                        return expression.args.get("default") or exp.null()
+                        return _replace_with(expression.args.get("default") or exp.null())
         elif isinstance(expression, exp.If) and not isinstance(expression.parent, exp.Case):
             if always_true(expression.this):
-                return expression.args["true"]
+                return _replace_with(expression.args["true"])
             if always_false(expression.this):
-                return expression.args.get("false") or exp.null()
+                return _replace_with(expression.args.get("false") or exp.null())
 
         return expression
 
