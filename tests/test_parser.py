@@ -271,6 +271,56 @@ class TestParser(unittest.TestCase):
         self.assertIsNone(expr.args.get("limit"))
         self.assertEqual(expr.sql(dialect="clickhouse"), single_union)
 
+    def test_set_operation_precedence(self):
+        # INTERSECT binds tighter than UNION / EXCEPT, which are left-associative
+        query = "SELECT 1 UNION ALL SELECT 2 INTERSECT SELECT 3 EXCEPT SELECT 4"
+        expr = parse_one(query)
+
+        except_ = expr.assert_is(exp.Except)
+        union = except_.this.assert_is(exp.Union)
+        intersect = union.expression.assert_is(exp.Intersect)
+        self.assertEqual(union.this.sql(), "SELECT 1")
+        self.assertEqual(intersect.this.sql(), "SELECT 2")
+        self.assertEqual(intersect.expression.sql(), "SELECT 3")
+        self.assertEqual(except_.expression.sql(), "SELECT 4")
+        self.assertEqual(expr.sql(), query)
+
+        union = parse_one("SELECT 1 INTERSECT SELECT 2 UNION SELECT 3").assert_is(exp.Union)
+        intersect = union.this.assert_is(exp.Intersect)
+        self.assertEqual(intersect.this.sql(), "SELECT 1")
+        self.assertEqual(intersect.expression.sql(), "SELECT 2")
+        self.assertEqual(union.expression.sql(), "SELECT 3")
+
+        union = parse_one(
+            "SELECT 1 UNION SELECT 2 INTERSECT SELECT 3 INTERSECT SELECT 4"
+        ).assert_is(exp.Union)
+        intersect = union.expression.assert_is(exp.Intersect)
+        self.assertIsInstance(intersect.this, exp.Intersect)
+        self.assertEqual(intersect.expression.sql(), "SELECT 4")
+
+        # Modifiers are attached to the topmost set operation node
+        query = "SELECT 1 UNION SELECT 2 INTERSECT SELECT 3 LIMIT 1"
+        expr = parse_one(query)
+        limit = expr.assert_is(exp.Union).args.get("limit")
+        self.assertIsInstance(limit, exp.Limit)
+        self.assertEqual(expr.sql(), query)
+
+        # Parenthesized operands keep their explicit grouping
+        query = "(SELECT 1 UNION SELECT 2) INTERSECT SELECT 3"
+        expr = parse_one(query)
+        intersect = expr.assert_is(exp.Intersect)
+        self.assertIsInstance(intersect.this, exp.Subquery)
+        self.assertEqual(expr.sql(), query)
+
+        # DISTINCT / ALL / BY NAME modifiers survive a duckdb round-trip
+        query = "SELECT 1 UNION ALL SELECT 2 INTERSECT ALL BY NAME SELECT 3"
+        expr = parse_one(query, read="duckdb")
+        union = expr.assert_is(exp.Union)
+        intersect = union.expression.assert_is(exp.Intersect)
+        self.assertFalse(intersect.args["distinct"])
+        self.assertTrue(intersect.args["by_name"])
+        self.assertEqual(parse_one(expr.sql("duckdb"), read="duckdb"), expr)
+
     def test_mod_precedence(self):
         expression = parse_one("SELECT 10 % 3 / 2").expressions[0]
 

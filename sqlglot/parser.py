@@ -5994,10 +5994,20 @@ class Parser:
             setop = self.parse_set_operation(this)
             if not setop:
                 break
-            this = setop
+
+            # INTERSECT binds tighter than UNION / EXCEPT, so it's grouped with the
+            # immediately preceding operand instead of the whole preceding chain
+            if isinstance(setop, exp.Intersect) and isinstance(this, (exp.Union, exp.Except)):
+                setop.set("this", this.expression)
+                this.set("expression", setop)
+            else:
+                this = setop
 
         if isinstance(this, exp.SetOperation) and self.MODIFIERS_ATTACHED_TO_SET_OP:
             expression = this.expression
+
+            while isinstance(expression, exp.SetOperation):
+                expression = expression.expression
 
             if expression:
                 for arg in self.SET_OP_MODIFIERS:
