@@ -61,6 +61,39 @@ class Create(Expression, DDL):
         return kind and kind.upper()
 
 
+class PolicySecurable(Expression):
+    arg_types = {"this": False, "kind": True}
+
+
+class Policy(Expression):
+    arg_types = {
+        "name": True,
+        "securable": True,
+        "comment": False,
+        "principals": True,
+        "except_": False,
+        "when": False,
+        "match_columns": False,
+        "using_columns": False,
+    }
+
+
+class RowFilterPolicy(Policy):
+    arg_types = {**Policy.arg_types, "function": True}
+
+
+class ColumnMaskPolicy(Policy):
+    arg_types = {**Policy.arg_types, "function": True, "on_column": True}
+
+
+class GrantPolicy(Policy):
+    arg_types = {
+        **Policy.arg_types,
+        "privileges": True,
+        "target": True,
+    }
+
+
 class SequenceProperties(Expression):
     arg_types = {
         "increment": False,

@@ -471,6 +471,94 @@ class TestDatabricks(Validator):
             "CREATE OR REFRESH STREAMING TABLE csv_data (id INT, ts TIMESTAMP, event STRING) AS SELECT * FROM STREAM READ_FILES('s3://bucket/path', format => 'csv', schema => 'id int, ts timestamp, event string')"
         )
 
+    def test_create_policy(self):
+        self.validate_identity(
+            "CREATE OR REPLACE POLICY mask_pii_strings "
+            "ON CATALOG my_catalog "
+            "COLUMN MASK my_catalog.governance.mask_pii_string "
+            "TO `account users` EXCEPT `some_exempt_group` "
+            "FOR TABLES "
+            "MATCH COLUMNS HAS_TAG_VALUE('pii_string', 'true') AS c "
+            "ON COLUMN c"
+        )
+        self.validate_identity(
+            "CREATE POLICY ssn_mask ON CATALOG employees "
+            "COLUMN MASK ssn_to_last_nr TO 'All Users' EXCEPT 'HR admins' "
+            "FOR TABLES MATCH COLUMNS HAS_TAG('ssn') AS ssn "
+            "ON COLUMN ssn USING COLUMNS (4)"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON SCHEMA s.t COLUMN MASK mask_fn "
+            "TO admins FOR TABLES WHEN HAS_IDENTITY_ATTRIBUTE_VALUE('team', 'x') "
+            "MATCH COLUMNS HAS_TAG('ssn') AS ssn ON COLUMN ssn USING COLUMNS (ssn, 7)"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON TABLE catalog.schema.tbl "
+            "ROW FILTER catalog.schema.region_filter TO a1, a2, 'service principal' "
+            "EXCEPT g1, g2 FOR TABLES "
+            "WHEN HAS_TAG_VALUE('sensitivity', 'high') "
+            "MATCH COLUMNS HAS_TAG('geo_region') AS region "
+            "USING COLUMNS (region)"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON METASTORE ROW FILTER region_filter TO analysts "
+            "FOR TABLES MATCH COLUMNS HAS_TAG('a') AS x, HAS_TAG_VALUE('b', 'true') AS y "
+            "USING COLUMNS (x, 'lit', 3, y)"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON SCHEMA prod.customers "
+            "COMMENT 'Hide European customers from sensitive tables' "
+            "ROW FILTER non_eu_region TO analysts FOR TABLES"
+        )
+        self.validate_identity(
+            "CREATE POLICY grant_anthropic_model_services ON SCHEMA system.ai "
+            "COMMENT 'Grant EXECUTE on Anthropic created model services' "
+            "TO data_scientists EXCEPT contractors "
+            "GRANT EXECUTE FOR MODEL SERVICES "
+            "WHEN HAS_TAG_VALUE('ai.model_creator', 'anthropic')"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON CATALOG c TO ds GRANT EXECUTE, USE SCHEMA FOR MODELS"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON CATALOG c TO ds GRANT EXECUTE FOR MODEL PROVIDER SERVICES"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON CATALOG c TO ds GRANT EXECUTE FOR MODEL_PROVIDER_SERVICES",
+            write_sql="CREATE POLICY p ON CATALOG c TO ds GRANT EXECUTE FOR MODEL PROVIDER SERVICES",
+        )
+        self.validate_identity("CREATE POLICY p ON CATALOG c TO ds GRANT EXECUTE FOR MCP SERVICES")
+        self.validate_identity(
+            "CREATE POLICY p ON CATALOG c TO ds GRANT EXECUTE FOR AGENT SERVICES"
+        )
+
+        expression = parse_one(
+            "CREATE POLICY p ON CATALOG c ROW FILTER f TO g FOR TABLES",
+            dialect="databricks",
+        )
+        self.assertIsInstance(expression, exp.Create)
+        self.assertEqual(expression.kind, "POLICY")
+        self.assertIsInstance(expression.this, exp.RowFilterPolicy)
+        self.assertEqual(expression.this.args["securable"].args["kind"], "CATALOG")
+
+        expression = parse_one(
+            "CREATE POLICY p ON METASTORE TO g GRANT X FOR MODELS",
+            dialect="databricks",
+        )
+        self.assertIsInstance(expression.this, exp.GrantPolicy)
+        self.assertIsNone(expression.this.args["securable"].this)
+
+        with self.assertRaises(ParseError):
+            parse_one(
+                "CREATE POLICY p ON CATALOG c ROW FILTER f FOR TABLES",
+                dialect="databricks",
+            )
+        with self.assertRaises(ParseError):
+            parse_one(
+                "CREATE POLICY p ON CATALOG c COLUMN MASK f TO g FOR TABLES",
+                dialect="databricks",
+            )
+
     def test_grant(self):
         self.validate_identity("GRANT CREATE ON SCHEMA my_schema TO `alf@melmak.et`")
         self.validate_identity("GRANT SELECT ON TABLE sample_data TO `alf@melmak.et`")

@@ -78,6 +78,11 @@ class DatabricksGenerator(SparkGenerator):
             and any(p.args.get("is_table") for p in expression.find_all(exp.ReturnsProperty))
         ):
             expression.set("expression", exp.Return(this=body))
+
+        if expression.kind == "POLICY":
+            replace = " OR REPLACE" if expression.args.get("replace") else ""
+            return f"CREATE{replace} {self.sql(expression, 'this')}"
+
         return super().create_sql(expression)
 
     def columndef_sql(self, expression: exp.ColumnDef, sep: str = " ") -> str:
@@ -125,3 +130,73 @@ class DatabricksGenerator(SparkGenerator):
     def clusterproperty_sql(self, expression):
         this = self.sql(expression, "this") or f"({self.expressions(expression, flat=True)})"
         return f"CLUSTER BY {this}"
+
+    def policysecurable_sql(self, expression: exp.PolicySecurable) -> str:
+        kind = self.sql(expression, "kind")
+        this = self.sql(expression, "this")
+        return f"{kind} {this}".strip()
+
+    def _policy_to_except_sql(self, expression: exp.Policy) -> str:
+        principals = self.expressions(expression, key="principals", flat=True)
+        principals = f"TO {principals}" if principals else ""
+
+        except_ = self.expressions(expression, key="except_", flat=True)
+        except_ = f" EXCEPT {except_}" if except_ else ""
+
+        return f"{principals}{except_}".strip()
+
+    def _policy_header_sql(self, expression: exp.Policy) -> str:
+        securable = self.sql(expression, "securable")
+        comment = self.sql(expression, "comment")
+        comment = f" COMMENT {comment}" if comment else ""
+        return f"POLICY {self.sql(expression, 'name')} ON {securable}{comment}"
+
+    def _policy_sql(self, expression: exp.Policy, body: str, tail: str = "") -> str:
+        to_except = self._policy_to_except_sql(expression)
+        to_except = f" {to_except}" if to_except else ""
+        return f"{self._policy_header_sql(expression)} {body}{to_except}{tail}"
+
+    def rowfilterpolicy_sql(self, expression: exp.RowFilterPolicy) -> str:
+        when = self.sql(expression, "when")
+        when = f" WHEN {when}" if when else ""
+
+        match_columns = self.expressions(expression, key="match_columns", flat=True)
+        match_columns = f" MATCH COLUMNS {match_columns}" if match_columns else ""
+
+        using_columns = self.sql(expression, "using_columns")
+        using_columns = f" USING COLUMNS {using_columns}" if using_columns else ""
+
+        body = f"ROW FILTER {self.sql(expression, 'function')}"
+        tail = f" FOR TABLES{when}{match_columns}{using_columns}"
+        return self._policy_sql(expression, body, tail)
+
+    def columnmaskpolicy_sql(self, expression: exp.ColumnMaskPolicy) -> str:
+        when = self.sql(expression, "when")
+        when = f" WHEN {when}" if when else ""
+
+        match_columns = self.expressions(expression, key="match_columns", flat=True)
+        match_columns = f" MATCH COLUMNS {match_columns}" if match_columns else ""
+
+        using_columns = self.sql(expression, "using_columns")
+        using_columns = f" USING COLUMNS {using_columns}" if using_columns else ""
+
+        body = f"COLUMN MASK {self.sql(expression, 'function')}"
+        tail = (
+            f" FOR TABLES{when}{match_columns} ON COLUMN "
+            f"{self.sql(expression, 'on_column')}{using_columns}"
+        )
+        return self._policy_sql(expression, body, tail)
+
+    def grantpolicy_sql(self, expression: exp.GrantPolicy) -> str:
+        privileges = self.expressions(expression, key="privileges", flat=True)
+        target = self.sql(expression, "target")
+
+        when = self.sql(expression, "when")
+        when = f" WHEN {when}" if when else ""
+
+        to_except = self._policy_to_except_sql(expression)
+        to_except = f"{to_except} " if to_except else ""
+        return (
+            f"{self._policy_header_sql(expression)} {to_except}"
+            f"GRANT {privileges} FOR {target}{when}"
+        )
