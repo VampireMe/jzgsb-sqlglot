@@ -720,12 +720,37 @@ def move_ctes_to_top_level(expression: E) -> E:
     are invalid in those dialects. This transformation can be used to ensure all CTEs are
     moved to the top level so that the final SQL code is valid from a syntax standpoint.
 
-    TODO: handle name clashes whilst moving CTEs (it can get quite tricky & costly).
+    If a nested CTE's name clashes with a CTE that already exists at the top level, or
+    with a table that is referenced outside of the nested CTE's scope, the nested CTE and
+    all references to it are renamed, so that hoisting it doesn't change the query's
+    semantics.
     """
     top_level_with: exp.With | None = expression.args.get("with_")
+
+    taken_cte_names = (
+        {cte.alias_or_name for cte in top_level_with.expressions} if top_level_with else set()
+    )
+    reserved_names = (
+        set(taken_cte_names)
+        | {table.name for table in expression.find_all(exp.Table)}
+        | {cte.alias_or_name for cte in expression.find_all(exp.CTE)}
+    )
+
     for inner_with in expression.find_all(exp.With):
         if inner_with.parent is expression:
             continue
+
+        scope = inner_with.parent
+        inner_ctes = inner_with.expressions
+
+        for index, cte in enumerate(inner_ctes):
+            name = cte.alias_or_name
+            if name in taken_cte_names or _table_is_referenced_outside_scope(
+                expression, scope, name
+            ):
+                new_name = find_new_name(reserved_names, name)
+                reserved_names.add(new_name)
+                _rename_cte(scope, inner_with, cte, inner_ctes[index + 1 :], name, new_name)
 
         if not top_level_with:
             top_level_with = inner_with.pop()
@@ -746,7 +771,76 @@ def move_ctes_to_top_level(expression: E) -> E:
                     "expressions", top_level_with.expressions + inner_with.expressions
                 )
 
+        taken_cte_names.update(cte.alias_or_name for cte in inner_ctes)
+
     return expression
+
+
+def _table_is_referenced_outside_scope(
+    expression: exp.Expression, scope: exp.Expression, name: str
+) -> bool:
+    for table in expression.find_all(exp.Table):
+        if table.name == name:
+            node: exp.Expression | None = table
+            while node is not None:
+                if node is scope:
+                    break
+                node = node.parent
+            else:
+                return True
+
+    return False
+
+
+def _rename_cte(
+    scope: exp.Expression,
+    moved_with: exp.With,
+    cte: exp.CTE,
+    later_ctes: list[exp.CTE],
+    name: str,
+    new_name: str,
+) -> None:
+    # The CTE is visible to its later siblings and to the query it's attached to. It can
+    # also reference itself if it's recursive. Nested scopes that redefine the name are
+    # pruned, since their references don't resolve to this CTE.
+    stack: list[exp.Expression] = [scope, *later_ctes]
+    if moved_with.recursive:
+        stack.append(cte)
+
+    nodes = []
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+
+        if node is scope:
+            stack.extend(child for child in node.iter_expressions() if child is not moved_with)
+            continue
+
+        node_with = node.args.get("with_")
+        if isinstance(node_with, exp.With) and any(
+            c.alias_or_name == name for c in node_with.expressions
+        ):
+            continue
+
+        stack.extend(node.iter_expressions())
+
+    # If columns are qualified by the CTE's name, references to it are aliased so the
+    # qualifiers keep resolving after the rename
+    qualify = any(isinstance(node, exp.Column) and node.table == name for node in nodes)
+    new_identifier = exp.to_identifier(new_name, quoted=cte.args["alias"].this.quoted)
+
+    for node in nodes:
+        if (
+            isinstance(node, exp.Table)
+            and node.name == name
+            and not node.db
+            and not node.catalog
+        ):
+            if qualify and not node.args.get("alias"):
+                node.set("alias", exp.TableAlias(this=node.this.copy()))
+            node.set("this", new_identifier.copy())
+
+    cte.args["alias"].set("this", new_identifier)
 
 
 def ensure_bools(expression: exp.Expr) -> exp.Expr:
