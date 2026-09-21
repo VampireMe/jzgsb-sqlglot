@@ -1042,6 +1042,23 @@ class TestMySQL(Validator):
             write_sql="SELECT CAST('2023-01-01 13:14:15.1+00:00' AS DATETIME(3))",
         )
 
+    def test_explicit_date_truncation_in_date_arithmetic(self):
+        self.validate_all(
+            "SELECT DATE_ADD(DATE(dt), INTERVAL (HOUR(dt)) HOUR) FROM t",
+            read={"mysql": "SELECT DATE_ADD(DATE(dt), INTERVAL HOUR(dt) HOUR) FROM t"},
+        )
+        self.validate_identity("SELECT DATE_ADD(DATE(dt), INTERVAL '1' DAY) FROM t")
+        self.validate_identity("SELECT DATE_SUB(DATE(dt), INTERVAL '2' HOUR) FROM t")
+        self.validate_identity("SELECT DATEDIFF(DATE(a), DATE(b)) FROM t")
+        self.validate_identity("SELECT DATE(dt) FROM t")
+        self.validate_identity("SELECT DAY(DATE(dt)), MONTH(DATE(dt)), YEAR(DATE(dt)) FROM t")
+
+        # TsOrDsToDate nodes produced by other dialects are still considered redundant
+        self.validate_all(
+            "SELECT DATE_ADD(dt, INTERVAL 1 DAY) FROM t",
+            read={"snowflake": "SELECT DATEADD(DAY, 1, TO_DATE(dt)) FROM t"},
+        )
+
     def test_mysql(self):
         for func in ("CHAR_LENGTH", "CHARACTER_LENGTH"):
             with self.subTest(f"Testing MySQL's {func}"):

@@ -2029,8 +2029,10 @@ def remove_ts_or_ds_to_date(
     def func(self: Generator, expression: exp.Func) -> str:
         for arg_key in args:
             arg = expression.args.get(arg_key)
-            if isinstance(arg, (exp.TsOrDsToDate, exp.TsOrDsToTimestamp)) and not arg.args.get(
-                "format"
+            if (
+                isinstance(arg, (exp.TsOrDsToDate, exp.TsOrDsToTimestamp))
+                and not arg.args.get("format")
+                and not arg.args.get("explicit")
             ):
                 expression.set(arg_key, arg.this)
 
