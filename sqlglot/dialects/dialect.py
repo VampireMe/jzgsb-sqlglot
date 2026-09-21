@@ -2025,13 +2025,14 @@ def ts_or_ds_add_cast(expression: exp.TsOrDsAdd) -> exp.TsOrDsAdd:
 def remove_ts_or_ds_to_date(
     to_sql: t.Callable[[Generator, exp.Expr], str] | None = None,
     args: tuple[str, ...] = ("this",),
+    keep: t.Callable[[t.Union[exp.TsOrDsToDate, exp.TsOrDsToTimestamp]], bool] | None = None,
 ) -> t.Callable[[Generator, exp.Func], str]:
     def func(self: Generator, expression: exp.Func) -> str:
         for arg_key in args:
             arg = expression.args.get(arg_key)
             if isinstance(arg, (exp.TsOrDsToDate, exp.TsOrDsToTimestamp)) and not arg.args.get(
                 "format"
-            ):
+            ) and not (keep and keep(arg)):
                 expression.set(arg_key, arg.this)
 
         return to_sql(self, expression) if to_sql else self.function_fallback_sql(expression)

@@ -501,7 +501,13 @@ class TsOrDiToDi(Expression, Func):
 
 
 class TsOrDsToDate(Expression, Func):
-    arg_types = {"this": True, "format": False, "safe": False, "default_date": False}
+    arg_types = {
+        "this": True,
+        "format": False,
+        "safe": False,
+        "default_date": False,
+        "explicit": False,
+    }
 
 
 class TsOrDsToDateStr(Expression, Func):

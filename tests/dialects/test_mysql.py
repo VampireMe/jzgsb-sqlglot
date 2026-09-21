@@ -1186,6 +1186,23 @@ class TestMySQL(Validator):
             },
         )
         self.validate_all(
+            "SELECT DATE_ADD(DATE(dt), INTERVAL (HOUR(dt)) HOUR) FROM t",
+            read={
+                "mysql": "SELECT DATE_ADD(DATE(dt), INTERVAL HOUR(dt) HOUR) FROM t",
+                "starrocks": "SELECT DATE_ADD(DATE(dt), INTERVAL HOUR(dt) HOUR) FROM t",
+                "doris": "SELECT DATE_ADD(DATE(dt), INTERVAL HOUR(dt) HOUR) FROM t",
+            },
+        )
+        self.validate_all(
+            "SELECT DATE_SUB(DATE(dt), INTERVAL (HOUR(dt)) HOUR) FROM t",
+            read={"mysql": "SELECT DATE_SUB(DATE(dt), INTERVAL HOUR(dt) HOUR) FROM t"},
+        )
+        self.validate_identity("SELECT DATE_ADD(DATE(DATE(dt)), INTERVAL '1' DAY) FROM t")
+        self.validate_all(
+            "SELECT DATE_ADD(x, INTERVAL 1 DAY) FROM t",
+            read={"snowflake": "SELECT DATEADD(day, 1, TO_DATE(x)) FROM t"},
+        )
+        self.validate_all(
             "SELECT * FROM t LOCK IN SHARE MODE", write={"mysql": "SELECT * FROM t FOR SHARE"}
         )
         self.validate_all(
