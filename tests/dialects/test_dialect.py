@@ -3505,6 +3505,42 @@ FROM subquery2""",
             },
             pretty=True,
         )
+        self.validate_all(
+            "WITH t AS (SELECT 1 AS c) SELECT * FROM (WITH t AS (SELECT 2 AS c) SELECT c FROM t) AS subq",
+            write={
+                "duckdb": "WITH t AS (SELECT 1 AS c) SELECT * FROM (WITH t AS (SELECT 2 AS c) SELECT c FROM t) AS subq",
+                "hive": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT c FROM t_2) AS subq",
+                "spark2": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT c FROM t_2) AS subq",
+                "tsql": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT c AS c FROM t_2) AS subq",
+            },
+        )
+        self.validate_all(
+            "WITH t AS (SELECT 1 AS c) SELECT * FROM (WITH t AS (SELECT 2 AS c), u AS (SELECT * FROM t) SELECT * FROM u) AS subq",
+            write={
+                "duckdb": "WITH t AS (SELECT 1 AS c) SELECT * FROM (WITH t AS (SELECT 2 AS c), u AS (SELECT * FROM t) SELECT * FROM u) AS subq",
+                "hive": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c), u AS (SELECT * FROM t_2) SELECT * FROM (SELECT * FROM u) AS subq",
+                "spark2": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c), u AS (SELECT * FROM t_2) SELECT * FROM (SELECT * FROM u) AS subq",
+                "tsql": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c), u AS (SELECT * FROM t_2) SELECT * FROM (SELECT * FROM u) AS subq",
+            },
+        )
+        self.validate_all(
+            "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1, (WITH t AS (SELECT 2 AS c) SELECT c FROM t) AS subq2",
+            write={
+                "duckdb": "SELECT * FROM (WITH t AS (SELECT 1 AS c) SELECT c FROM t) AS subq1, (WITH t AS (SELECT 2 AS c) SELECT c FROM t) AS subq2",
+                "hive": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT c FROM t) AS subq1, (SELECT c FROM t_2) AS subq2",
+                "spark2": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT c FROM t) AS subq1, (SELECT c FROM t_2) AS subq2",
+                "tsql": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT c AS c FROM t) AS subq1, (SELECT c AS c FROM t_2) AS subq2",
+            },
+        )
+        self.validate_all(
+            "WITH t AS (SELECT 1 AS c) SELECT * FROM (WITH t AS (SELECT 2 AS c) SELECT t.c FROM t) AS subq",
+            write={
+                "duckdb": "WITH t AS (SELECT 1 AS c) SELECT * FROM (WITH t AS (SELECT 2 AS c) SELECT t.c FROM t) AS subq",
+                "hive": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT t_2.c FROM t_2) AS subq",
+                "spark2": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT t_2.c FROM t_2) AS subq",
+                "tsql": "WITH t AS (SELECT 1 AS c), t_2 AS (SELECT 2 AS c) SELECT * FROM (SELECT t_2.c AS c FROM t_2) AS subq",
+            },
+        )
 
     def test_unsupported_null_ordering(self):
         # We'll transpile a portable query from the following dialects to MySQL / T-SQL, which

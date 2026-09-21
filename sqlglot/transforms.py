@@ -720,13 +720,18 @@ def move_ctes_to_top_level(expression: E) -> E:
     are invalid in those dialects. This transformation can be used to ensure all CTEs are
     moved to the top level so that the final SQL code is valid from a syntax standpoint.
 
-    TODO: handle name clashes whilst moving CTEs (it can get quite tricky & costly).
+    If a moved CTE's name clashes with another CTE's name, the moved CTE and all
+    references to it are renamed to preserve the query's semantics.
     """
     top_level_with: exp.With | None = expression.args.get("with_")
-    for inner_with in expression.find_all(exp.With):
-        if inner_with.parent is expression:
-            continue
+    inner_withs = [
+        with_ for with_ in expression.find_all(exp.With) if with_.parent is not expression
+    ]
 
+    if inner_withs:
+        _rename_conflicting_ctes(expression, top_level_with, inner_withs)
+
+    for inner_with in inner_withs:
         if not top_level_with:
             top_level_with = inner_with.pop()
             expression.set("with_", top_level_with)
@@ -747,6 +752,72 @@ def move_ctes_to_top_level(expression: E) -> E:
                 )
 
     return expression
+
+
+def _rename_conflicting_ctes(
+    expression: exp.Expr, top_level_with: exp.With | None, inner_withs: list[exp.With]
+) -> None:
+    """
+    Renames CTEs that are about to be moved to the top level so their names don't clash
+    with other CTEs, updating all references to them to preserve the query's semantics.
+    """
+    inner_ctes = [cte for with_ in inner_withs for cte in with_.expressions]
+    inner_cte_names = [cte.alias for cte in inner_ctes]
+
+    taken = {cte.alias for cte in top_level_with.expressions} if top_level_with else set()
+    if not any(name in taken for name in inner_cte_names) and len(inner_cte_names) == len(
+        set(inner_cte_names)
+    ):
+        return
+
+    # The new names must not collide with any source name, otherwise renamed references
+    # could be captured by an unrelated source (e.g. a table or a derived table alias)
+    existing = {alias.name for alias in expression.find_all(exp.TableAlias)}
+    existing.update(table.name for table in expression.find_all(exp.Table))
+
+    renames: dict[exp.CTE, str] = {}
+    for cte in inner_ctes:
+        name = cte.alias
+        if name in taken:
+            name = find_new_name(existing, name)
+            renames[cte] = name
+            existing.add(name)
+        taken.add(name)
+
+    from sqlglot.optimizer.scope import traverse_scope
+
+    # Maps the id of a renamed CTE's query to its new name, so that references resolving
+    # to it can be found. For recursive CTEs, the query's left operand is also mapped,
+    # since self-references resolve to a scope rooted at it (see scope._traverse_ctes).
+    new_names: dict[int, str] = {}
+    for cte, new_name in renames.items():
+        new_names[id(cte.this)] = new_name
+        if isinstance(cte.this, exp.SetOperation):
+            new_names[id(cte.this.this)] = new_name
+
+    for scope in traverse_scope(expression):
+        for name, source in scope.cte_sources.items():
+            new_name = new_names.get(id(source.expression))
+
+            # A source is renamed only if the name unambiguously resolves to the renamed
+            # CTE in this scope, i.e. it's not shadowed by a local source with the same name
+            if not new_name or scope.sources.get(name) is not source:
+                continue
+
+            for table in scope.tables:
+                if (
+                    table.name == name
+                    and isinstance(table.this, exp.Identifier)
+                    and not table.args.get("db")
+                ):
+                    table.this.set("this", new_name)
+
+            for column in scope.columns:
+                if column.table == name:
+                    column.args["table"].set("this", new_name)
+
+    for cte, new_name in renames.items():
+        cte.args["alias"].this.set("this", new_name)
 
 
 def ensure_bools(expression: exp.Expr) -> exp.Expr:
