@@ -11,6 +11,78 @@ class TestDatabricks(Validator):
             "INSERT INTO target REPLACE USING (c1, c2) SELECT c1, c2 FROM source"
         )
 
+    def test_create_policy(self):
+        self.validate_identity(
+            "CREATE OR REPLACE POLICY mask_pii_strings ON CATALOG my_catalog "
+            "COLUMN MASK my_catalog.governance.mask_pii_string "
+            "TO `account users` EXCEPT `some_exempt_group` "
+            "FOR TABLES MATCH COLUMNS HAS_TAG_VALUE('pii_string', 'true') AS c ON COLUMN c"
+        )
+
+        self.validate_identity(
+            "CREATE POLICY ssn_mask ON CATALOG employees COLUMN MASK ssn_to_last_nr "
+            "TO 'All Users' EXCEPT 'HR admins' FOR TABLES "
+            "MATCH COLUMNS HAS_TAG('ssn') AS ssn ON COLUMN ssn USING COLUMNS (4)"
+        )
+
+        self.validate_identity(
+            "CREATE POLICY hide_eu_customers ON SCHEMA prod.customers "
+            "COMMENT 'Hide European customers from sensitive tables' "
+            "ROW FILTER non_eu_region TO analysts FOR TABLES "
+            "WHEN HAS_TAG_VALUE('sensitivity', 'high') "
+            "MATCH COLUMNS HAS_TAG('geo_region') AS region USING COLUMNS (region)"
+        )
+
+        self.validate_identity(
+            "CREATE POLICY grant_anthropic_model_services ON SCHEMA system.ai "
+            "COMMENT 'Grant EXECUTE on Anthropic model services' "
+            "TO data_scientists EXCEPT contractors "
+            "GRANT EXECUTE FOR MODEL SERVICES "
+            "WHEN HAS_TAG_VALUE('ai.model_creator', 'anthropic')"
+        )
+
+        self.validate_identity("CREATE POLICY p ON METASTORE ROW FILTER f TO u1, u2 FOR TABLES")
+        self.validate_identity(
+            "CREATE POLICY p ON TABLE catalog.schema.table COLUMN MASK mask_fn "
+            "TO `account users` FOR TABLES ON COLUMN col USING COLUMNS (col, 1)"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON CATALOG c ROW FILTER catalog.schema.fn TO analysts FOR TABLES "
+            "MATCH COLUMNS HAS_TAG('x') region USING COLUMNS (region, 4)",
+            "CREATE POLICY p ON CATALOG c ROW FILTER catalog.schema.fn TO analysts FOR TABLES "
+            "MATCH COLUMNS HAS_TAG('x') AS region USING COLUMNS (region, 4)",
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON SCHEMA s COLUMN MASK m TO u1, u2 EXCEPT e1, e2 FOR TABLES "
+            "WHEN NOT HAS_TAG_VALUE('classification', 'unverified') "
+            "MATCH COLUMNS HAS_TAG('pii') AS a, HAS_TAG('pii') OR HAS_TAG('phi') AS b "
+            "ON COLUMN a USING COLUMNS (a, b, 'constant')"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON METASTORE TO data_scientists GRANT EXECUTE, USE "
+            "FOR MODEL PROVIDER SERVICES"
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON CATALOG c TO data_scientists GRANT EXECUTE FOR MCP_SERVICES",
+            "CREATE POLICY p ON CATALOG c TO data_scientists GRANT EXECUTE FOR MCP SERVICES",
+        )
+        self.validate_identity(
+            "CREATE POLICY p ON SCHEMA s TO ds GRANT SELECT, INSERT FOR AGENT SERVICES "
+            "WHEN HAS_TAG('t')"
+        )
+
+        for statement in (
+            "CREATE POLICY p ON CATALOG c COLUMN MASK m TO u FOR TABLES ON COLUMN z",
+            "CREATE POLICY p ON CATALOG c ROW FILTER f TO u FOR TABLES",
+            "CREATE POLICY p ON CATALOG c TO ds GRANT SELECT FOR MODELS",
+        ):
+            self.assertIsInstance(parse_one(statement, read="databricks"), exp.Create)
+
+        self.assertIsInstance(
+            parse_one("CREATE POLICY p ON CATALOG c NOT A POLICY BODY", read="databricks"),
+            exp.Command,
+        )
+
     def test_databricks(self):
         self.validate_identity("CREATE TABLE foo (my_arr ARRAY<STRING COLLATE UTF8_BINARY>)")
         self.validate_identity("CREATE TABLE foo (m MAP<STRING, STRING COLLATE UTF8_BINARY>)")

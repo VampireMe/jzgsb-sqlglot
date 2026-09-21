@@ -443,3 +443,26 @@ class Execute(Expression):
 
 class ExecuteSql(Execute):
     pass
+
+
+class Policy(Expression):
+    arg_types = {
+        "securable_kind": False,
+        "securable": False,
+        "comment": False,
+        "kind": False,
+        "this": False,
+        "principals": False,
+        "except_": False,
+        "when": False,
+        "match_columns": False,
+        "on_column": False,
+        "using_columns": False,
+        "privileges": False,
+        "target_kind": False,
+    }
+
+    @property
+    def kind(self) -> str | None:
+        kind = self.args.get("kind")
+        return kind.name if kind else None

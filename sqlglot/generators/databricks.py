@@ -71,6 +71,15 @@ class DatabricksGenerator(SparkGenerator):
 
     def create_sql(self, expression: exp.Create) -> str:
         body = expression.expression
+        if expression.kind == "POLICY" and body:
+            replace = " OR REPLACE" if expression.args.get("replace") else ""
+            body_sql = self.sql(body)
+            if self.pretty:
+                body_sql = self.indent(body_sql, pad=2)
+            return self.prepend_ctes(
+                expression,
+                f"CREATE{replace} POLICY {self.sql(expression, 'this')}{self.seg(body_sql)}",
+            )
         if (
             body
             and not isinstance(body, exp.Return)
@@ -125,3 +134,60 @@ class DatabricksGenerator(SparkGenerator):
     def clusterproperty_sql(self, expression):
         this = self.sql(expression, "this") or f"({self.expressions(expression, flat=True)})"
         return f"CLUSTER BY {this}"
+
+    def policy_sql(self, expression: exp.Policy) -> str:
+        clauses = []
+
+        securable_kind = self.sql(expression, "securable_kind")
+        if securable_kind:
+            clause = f"ON {securable_kind}"
+            securable = self.sql(expression, "securable")
+            if securable:
+                clause += f" {securable}"
+            clauses.append(clause)
+
+        comment = self.sql(expression, "comment")
+        if comment:
+            clauses.append(f"COMMENT {comment}")
+
+        kind = self.sql(expression, "kind")
+        function_name = self.sql(expression, "this")
+        principals = self.expressions(expression, key="principals", indent=False)
+        except_principals = self.expressions(expression, key="except_", indent=False)
+        when = self.sql(expression, "when")
+        match_columns = self.expressions(expression, key="match_columns", indent=False)
+        on_column = self.sql(expression, "on_column")
+        using_columns = self.expressions(expression, key="using_columns", indent=False)
+        privileges = self.expressions(expression, key="privileges", indent=False)
+        target_kind = self.sql(expression, "target_kind")
+
+        if kind:
+            clauses.append(f"{kind} {function_name}")
+
+        if principals:
+            clauses.append(f"TO {principals}")
+        if except_principals:
+            clauses.append(f"EXCEPT {except_principals}")
+
+        if kind:
+            clauses.append("FOR TABLES")
+
+            if when:
+                clauses.append(f"WHEN {when}")
+            if match_columns:
+                clauses.append(f"MATCH COLUMNS {match_columns}")
+
+            if expression.kind == "COLUMN MASK" and on_column:
+                clauses.append(f"ON COLUMN {on_column}")
+
+            if using_columns:
+                clauses.append(f"USING COLUMNS ({using_columns})")
+        else:
+            if privileges:
+                clauses.append(f"GRANT {privileges}")
+                if target_kind:
+                    clauses[-1] += f" FOR {target_kind}"
+            if when:
+                clauses.append(f"WHEN {when}")
+
+        return self.sep("\n" if self.pretty else " ").join(clauses)
